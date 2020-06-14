@@ -1,4 +1,7 @@
 <?php
+/*
+ * @todo Separate the methods performing different operations like inserts, edits etc by putting in different classes.
+ */
 
 use MongoDB\Driver\ReadConcern;
 use MongoDB\Driver\ReadPreference;
@@ -14,6 +17,7 @@ class DBHandler
     private $users_collection;
     private $rooms_collection;
     private $transactionOptions;
+//    const BUCKET_SIZE = 1000 * 60 * 60 * 24 * 10;
 
     /**
      * DBHandler constructor.
@@ -23,10 +27,10 @@ class DBHandler
     function __construct($host = "localhost", $port = 27017)
     {
         $this->client = new MongoDB\Client("mongodb://{$host}:{$port}", [], ["typeMap" => ['root' => 'array', 'document' => 'array']]);
-        $this->chat_db = $this->client->chat;
-        $this->messages_collection = $this->chat_db->messages;
-        $this->users_collection = $this->chat_db->users;
-        $this->rooms_collection = $this->chat_db->rooms;
+        $this->chat_db = $this->client->selectDatabase("chat");
+        $this->messages_collection = $this->chat_db->selectCollection("messages");
+        $this->users_collection = $this->chat_db->selectCollection("users");
+        $this->rooms_collection = $this->chat_db->selectCollection("rooms");
         $this->transactionOptions = [
             'readConcern' => new ReadConcern(ReadConcern::LOCAL),
             'writeConcern' => new WriteConcern(WriteConcern::MAJORITY, 1000),
@@ -48,8 +52,7 @@ class DBHandler
         try {
             $count = 0;
             for ($i = 1; $i <= $nRooms; $i++) {
-                $result = $this->rooms_collection->insertOne(['_id' => $i, 'room_name' => "Room $i", 'blocked_users' => [], 'message_ids' => [], 'rate_limit' => 1, 'online_users' => []]);
-                $count += $result->getInsertedCount();
+                $count += $this->addRoom($i, "Room $i", 10);
             }
             if ($count == $nRooms) {
                 $this->log("Init rooms success", __FUNCTION__);
@@ -63,27 +66,56 @@ class DBHandler
 
     private function log($message, $method_name)
     {
-        echo $message . " at " . $method_name . "\n";
+        echo $message . " at " . $method_name . "()\n";
     }
 
-    private function addRoom($room_id, $room_name, $rate_limit = 1)
+    /**
+     * Returns true if insert is success, else returns false.
+     * @param int $room_id
+     * @param string $room_name
+     * @param int $rate_limit
+     * @return bool
+     * @todo Only authorized person should be able add room. require $user_id in input.
+     */
+    private function addRoom($room_id, $room_name, $rate_limit = 10)
     {
         try {
-            $result = $this->rooms_collection->insertOne(['_id' => $room_id, 'room_name' => $room_name, 'blocked_users' => [], 'message_ids' => [], 'rate_limit' => $rate_limit, 'online_users' => []]);
-            return $result->getInsertedCount();
+            $result = $this->rooms_collection->insertOne([
+                '_id' => $room_id,
+                'room_name' => $room_name,
+                'created_on' => round(microtime(true) * 1000),
+                'banned_users' => [],
+                'rate_limit' => $rate_limit,
+                'online_users' => []
+            ]);
+            return $result->getInsertedCount() === 1;
         } catch (Exception $e) {
             $this->log("Exception: " . $e->getMessage(), __FUNCTION__);
         }
         return false;
     }
 
+    /**
+     * Require user id to check permission to be able to delete room.
+     * @param string $user_id
+     * @param int $room_id
+     * @todo Complete the function.
+     */
+    public function deleteRoom($user_id, $room_id)
+    {
+
+    }
+
+    /**
+     * @param int $nRooms
+     * @return bool
+     */
     private function clearOnlineUsersInRooms($nRooms = 5)
     {
         try {
             $room_ids = range(1, 5);
             $result = $this->rooms_collection->updateMany(['_id' => ['$in' => $room_ids]], ['$set' => ['online_users' => []]]);
             if ($result->getModifiedCount() == $nRooms || $result->getMatchedCount() == $nRooms)
-//                echo "clear online users success.\n";
                 return true;
         } catch (Exception $e) {
             $this->log("Exception: " . $e->getMessage(), __FUNCTION__);
@@ -92,7 +124,7 @@ class DBHandler
     }
 
     /**
-     * returns true if collection exists, otherwise false.
+     * Returns true if collection exists, otherwise false.
      * @param string $name Name of the collection.
      * @return bool
      */
@@ -109,7 +141,7 @@ class DBHandler
      * @param string $user_id
      * @param string $user_name
      * @param array $rooms_access
-     * @return bool true if success, false if failure.
+     * @return bool returns true if success, false if failure.
      */
 
     public function createUser($user_id, $user_name, $rooms_access)
@@ -154,123 +186,100 @@ class DBHandler
     }
 
     /**
-     * Returns array of room id's. Returns false if there is an exception.
+     * Returns associative array with key room_id and value array of usernames if user exists and room he has access to exists.
      * @param string $user_id
-     * @return false|array
+     * @param array $rooms_access
+     * @return array|false
      */
-    public function getRoomIDsOfUser($user_id)
+    public function getOnlineUserNamesOfAccessRooms($rooms_access)
     {
         try {
-            $result = $this->users_collection->findOne(['_id' => $user_id], ['projection' => ['_id' => 0, 'rooms_access' => 1]]);
-            return $result['rooms_access'];
-        } catch (Exception $e) {
-            $this->log("Exception: " . $e->getMessage(), __FUNCTION__);
-            return false;
-        }
-    }
-
-    /**
-     *
-     * @param string $user_id
-     * @return false|array Returns associative array key room_id and value room_name.
-     */
-    public function getRoomIDsNamesAccessToUser($user_id)
-    {
-        try {
-            $result = $this->users_collection->aggregate([
-                ['$match' => ['_id' => $user_id]],
-                ['$lookup' => ['from' => 'rooms', 'localField' => 'rooms_access', 'foreignField' => '_id', 'as' => 'rooms']],
-                ['$unwind' => '$rooms'],
-                ['$project' => ['_id' => 0, 'room_id' => '$rooms._id', 'room_name' => '$rooms.room_name']]
-            ]);//array of associative arrays with keys 'room_id', 'room_name'
-            $rooms = array();
-            foreach ($result as $room) {
-                $rooms[$room['room_id']] = $room['room_name'];
-            }
-            return $rooms;
-        } catch (Exception $e) {
-            $this->log("Exception: " . $e->getMessage(), __FUNCTION__);
-            return false;
-        }
-    }
-
-    public function getOnlineUserNamesOfAccessRooms($user_id)
-    {
-        try {
-            $result = $this->users_collection->aggregate([
-                ['$match' => ['_id' => $user_id]],
-                ['$lookup' => ['from' => 'rooms', 'localField' => 'rooms_access', 'foreignField' => '_id', 'as' => 'rooms']],
-                ['$unwind' => '$rooms'],
-                ['$lookup' => ['from' => 'users', 'localField' => 'rooms.online_users', 'foreignField' => '_id', 'as' => 'users']],
-                ['$project' => ['_id' => 0, 'room_id' => '$rooms._id', 'users' => '$users.user_name']]
-            ]); //output of form room_id => int, users => array of usernames.
+            $result = $this->rooms_collection->aggregate([
+                ['$match' => ['_id' => ['$in' => $rooms_access]]],
+                ['$project' => ['online_usernames' => '$online_users.user_name']]
+            ]); //output of form _id => int, online_users => array of usernames.
 
             $online_users = array();
             foreach ($result as $room) {
-                $online_users[$room['room_id']] = $room['users'];
+                $online_users[$room['_id']] = $room['online_usernames'];
             }
 
             return $online_users;
+
         } catch (Exception $e) {
             $this->log("Exception: " . $e->getMessage(), __FUNCTION__);
         }
         return false;
     }
 
+    /**
+     * unique users(common) in all rooms for which the user has access to.
+     * @param string $user_id
+     * @return array|bool
+     */
     public function getUniqueUsersInRoomsOfUser($user_id)
     {
         try {
-            $result = $this->users_collection->aggregate([
-                ['$match' => ['_id' => $user_id]],
-                ['$lookup' => ['from' => 'rooms', 'localField' => 'rooms_access', 'foreignField' => '_id', 'as' => 'rooms']],
-                ['$unwind' => '$rooms'],
-                ['$lookup' => ['from' => 'users', 'localField' => 'rooms.online_users', 'foreignField' => '_id', 'as' => 'users']],
-                ['$unwind' => '$users'],
-                ['$match' => ['$expr' => ['$ne' => ['$_id', '$users._id']]]],
-                ['$project' => [
-                    '_id' => 0,
-                    'room_id' => '$rooms._id',
-                    'user_id' => '$users._id',
-                    'user_name' => '$users.user_name',
-                    'rooms_intersect' => ['$setIntersection' => ['$rooms_access', '$users.rooms_access']]]
-                ],
-                ['$group' => ['_id' => '$user_id', 'user_name' => ['$first' => '$user_name'], 'rooms' => ['$first' => '$rooms_intersect']]]
-            ]);
-            $unique_users = array();
-            foreach ($result as $user) {
-                $unique_users[$user['_id']] = array('user_name' => $user['user_name'], 'rooms' => $user['rooms']);
+            if ($rooms_access_arr = $this->users_collection->findOne(['_id' => $user_id], ['projection' => ['_id' => 0, 'rooms_access' => 1]])['rooms_access']) {
+                $result = $this->rooms_collection->aggregate([
+                    ['$match' => ['_id' => ['$in' => $rooms_access_arr]]],
+                    ['$project' => ['online_users' => 1]],
+                    ['$unwind' => '$online_users'],
+                    ['$match' => ['$expr' => ['$ne' => ['$online_users.user_id', $user_id]]]],
+                    ['$group' => ['_id' => '$online_users.user_id', 'rooms' => ['$push' => '$_id'], 'user_name' => ['$first' => '$online_users.user_name']]]
+                ]);
+
+//            $result = $this->users_collection->aggregate([
+//                ['$match' => ['_id' => $user_id]],
+//                ['$lookup' => ['from' => 'rooms', 'localField' => 'rooms_access', 'foreignField' => '_id', 'as' => 'rooms']],
+//                ['$unwind' => '$rooms'],
+//                ['$lookup' => ['from' => 'users', 'localField' => 'rooms.online_users', 'foreignField' => '_id', 'as' => 'users']],
+//                    ['$unwind' => '$online_users'],
+//                    ['$match' => ['$expr' => ['$ne' => ['$_id', '$users._id']]]],
+//                    ['$project' => [
+//                        '_id' => 0,
+//                        'room_id' => '$rooms._id',
+//                        'user_id' => '$users._id',
+//                        'user_name' => '$users.user_name',
+//                        'rooms_intersect' => ['$setIntersection' => ['$rooms_access', '$users.rooms_access']]]
+//                    ],
+//                    ['$group' => ['_id' => '$user_id', 'user_name' => ['$first' => '$user_name'], 'rooms' => ['$first' => '$rooms_intersect']]]
+//                ]);
+                $unique_users = array();
+                foreach ($result as $user) {
+                    $unique_users[$user['_id']] = array('user_name' => $user['user_name'], 'rooms' => $user['rooms']);
+                }
+                return $unique_users;
             }
-            return $unique_users;
         } catch (Exception $e) {
             $this->log("Exception: " . $e->getMessage(), __FUNCTION__);
         }
         return false;
     }
 
-    public function getMessageHistoryFromRooms($user_id, $n = 50)
-    {
+    public function getMessageHistoryFromRooms($rooms_access, $skip = 0, $limit = 50)
+    { // index (room_id, _id) on messages collection is used.
+//        https://stackoverflow.com/questions/33458107/limit-and-sort-each-group-by-in-mongodb-using-aggregation
+//        https://docs.mongodb.com/manual/core/aggregation-pipeline-optimization/#agg-sort-skip-limit-sequence
         try {
-            $result = $this->users_collection->aggregate([
-                ['$match' => ['_id' => $user_id]],
-                ['$project' => ['_id' => 0, 'rooms_access' => 1]],
-                ['$lookup' => ['from' => 'rooms', 'localField' => 'rooms_access', 'foreignField' => '_id', 'as' => 'rooms']],
-                ['$unwind' => '$rooms'],
-                ['$project' => ['room_id' => '$rooms._id', 'message_ids' => ['$slice' => ['$rooms.message_ids', -$n]]]],
-                ['$lookup' => ['from' => 'messages', 'localField' => 'message_ids', 'foreignField' => '_id', 'as' => 'messages']],
-                ['$unset' => ['message_ids', 'messages._id', 'messages.stats']],
-                ['$unwind' => '$messages'],
-                ['$lookup' => ['from' => 'users', 'localField' => 'messages.from', 'foreignField' => '_id', 'as' => 'user']],
-                ['$unwind' => '$user'],
-                ['$set' => ['messages.username' => '$user.user_name']],
-                ['$unset' => 'messages.from'],
-                ['$group' => ['_id' => '$room_id', 'room_id' => ['$first' => '$room_id'], 'messages' => ['$push' => '$messages']]],
-                ['$unset' => '_id']
-            ]);
-
             $message_history = array();
-            foreach ($result as $room) {
-                $message_history[$room['room_id']] = $room['messages'];
+            foreach ($rooms_access as $room_id) {
+                $result = $this->messages_collection->aggregate([
+                    ['$match' => ['room_id' => $room_id]],
+                    ['$sort' => ['_id' => -1]],
+                    ['$skip' => $skip],
+                    ['$limit' => $limit],
+                    ['$set' => ['message_id' => '$_id']],
+                    ['$unset' => ['stats', '_id']],
+                    ['$sort' => ['_id' => 1]],
+                    ['$group' => ['_id' => '$room_id', 'messages' => ['$push' => '$$ROOT']]],
+                    ['$unset' => 'messages.room_id']
+                ]);
+                foreach ($result as $room_messages) {
+                    $message_history[$room_messages['_id']] = $room_messages['messages'];
+                }
             }
+
             return $message_history;
         } catch (Exception $e) {
             $this->log("Exception: " . $e->getMessage(), __FUNCTION__);
@@ -279,8 +288,8 @@ class DBHandler
     }
 
     /**
-     * Returns array of online userids.
-     * @param string $room_id
+     * Returns array of json objects with keys user_id, user_name for given room_id.
+     * @param int $room_id
      * @return bool|mixed
      */
     public function getOnlineUsersInRoom($room_id)
@@ -296,17 +305,18 @@ class DBHandler
     }
 
     /**
-     * Insert userid in online_users array of each room to which the user has access to.
+     * Insert user id, user name in online_users array of each room to which the user has access to.
      * @param string $user_id
+     * @param string $user_name
+     * @param array $rooms_access
      * @return bool
      */
-    public function insertOnlineUserInRooms($user_id)
+    public function insertOnlineUserInRooms($user_id, $user_name, $rooms_access): bool
     {
         try {
-            $rooms_access = $this->getRoomIDsOfUser($user_id);
             $result = $this->rooms_collection->updateMany(
                 ['_id' => ['$in' => $rooms_access]],
-                ['$addToSet' => ['online_users' => $user_id]]
+                ['$addToSet' => ['online_users' => ['user_id' => $user_id, 'user_name' => $user_name]]]
             );
             return $result->getModifiedCount() === 1;
         } catch (Exception $e) {
@@ -316,16 +326,18 @@ class DBHandler
     }
 
     /**
+     * Removes user id from online_users array for given room in rooms collection.
      * @param string $user_id
+     * @param string $user_name
+     * @param array $rooms_access
      * @return bool
      */
-    public function deleteOfflineUserInRooms($user_id)
+    public function deleteOfflineUserInRooms(string $user_id, string $user_name, array $rooms_access): bool
     {
         try {
-            $rooms_access = $this->getRoomIDsOfUser($user_id);
             $result = $this->rooms_collection->updateMany(
                 ['_id' => ['$in' => $rooms_access]],
-                ['$pull' => ['online_users' => $user_id]]
+                ['$pull' => ['online_users' => ['user_id' => $user_id, 'user_name' => $user_name]]]
             );
             return true;
         } catch (Exception $e) {
@@ -336,33 +348,53 @@ class DBHandler
 
     /**
      * creates a message document in messages collection and pushes the id in message_ids of a room in rooms collection.
+     * @param int $message_id
      * @param int $room_id
      * @param string $user_id
-     * @param array $message
-     * @param int $message_id
+     * @param string $user_name
+     * @param string $message
      * @return bool
      */
-    public function addMessageToRoom($room_id, $user_id, $message, $message_id)
+    public function addMessageToRoom($message_id, $room_id, $user_id, $user_name, $message): bool
     {
-        $session = $this->client->startSession();
-        $session->startTransaction($this->transactionOptions);
         try {
             $room_id = $room_id + 0; //room_id is integer
             $result = $this->messages_collection->insertOne([
                 '_id' => $message_id,
-                'from' => $user_id,
-                'message' => $message['message'],
-                'created_on' => $message['created_on']
+                'room_id' => $room_id,
+//                'bucket' => (int)(($message_id >> 21) / self::BUCKET_SIZE), //10 days of messages will be stored in at most 1 bucket.
+                'from' => ['user_id' => $user_id, 'user_name' => $user_name],
+                'message' => $message
             ]);
-            if ($result->getInsertedCount() === 1) {
-                $result = $this->rooms_collection->updateOne(['_id' => $room_id], ['$push' => ['message_ids' => $message_id]]);
-                $session->commitTransaction();
-                return true;
-            }
-            $session->abortTransaction();
+            return $result->getInsertedCount() === 1;
         } catch (Exception $e) {
             $this->log("Exception: " . $e->getMessage(), __FUNCTION__);
-            $session->abortTransaction();
+        }
+        return false;
+    }
+
+    /**
+     * @param int $room_id
+     * @param string $user_id user id which belongs to the message
+     * @param string $by_user_id user id who is editing the message
+     * @param int $message_id
+     * @param string $message
+     * @return bool
+     * @todo Check if $by_user_id has permission to edit the message in the room.
+     */
+    public function editMessageInMessageCollection($room_id, $user_id, $by_user_id, $message_id, $message): bool
+    {
+        try {
+            if ($user_id === $by_user_id) { //User can edit his own message.
+                $room_id = $room_id + 0; //room_id is integer. implicit conversion.
+                $result = $this->messages_collection->updateOne(
+                    ['room_id' => $room_id, 'from.user_id' => $user_id, '_id' => $message_id],
+                    ['messages' => $message]
+                );
+                return $result->getModifiedCount() === 1;
+            }
+        } catch (Exception $e) {
+            $this->log("Exception: " . $e->getMessage(), __FUNCTION__);
         }
         return false;
     }

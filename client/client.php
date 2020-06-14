@@ -1,35 +1,22 @@
 <?php
 require_once __DIR__ . "/../jwt.php";
-require_once __DIR__ . '/db_handler.php';
+require_once __DIR__ . '/ClientDBHandler.php';
 
 if (!isset($_COOKIE['jwt'])) {
     header("Location: login.php");
     exit();
 }
 
-$db_handler = new ClientDBHandler();
+$db_handler = new ClientDBHandler("localhost", 60000);
 
 $payload = json_decode((new JWT())->get_user_details_from_jwt($_COOKIE['jwt']), true);
 $rooms = $db_handler->getRoomIDsNamesAccessToUser($payload['user_id']);
 ?>
 <!DOCTYPE html>
-<!--
-/**
- * Demo Websocket Lesson 2 - CLIENT CODE
- * -----------------------------------------
- * @Topic  : Online ChatRoom
- * @Author : ANHVNSE02067 <anhvnse@gmail.com>
- * @Website: www.nhatanh.net
- *
- * @Desc: This tutorial will provide you
- * an example of realtime chatroom
- * with no database needed.
- */
--->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css" rel="stylesheet">
+<!--    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css" rel="stylesheet">-->
     <title>Echo server - Websocket Demo</title>
     <style type="text/css">
         * {
@@ -129,12 +116,13 @@ $rooms = $db_handler->getRoomIDsNamesAccessToUser($payload['user_id']);
         }
 
         #onlineusersparent {
+            box-sizing: border-box;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
             margin: 0;
             padding: 3px;
             height: 50%;
             border-top: 2px solid green;
-            /*border: 2px solid black;*/
-            /*overflow: auto;*/
         }
 
         #onlineusers {
@@ -163,24 +151,22 @@ $rooms = $db_handler->getRoomIDsNamesAccessToUser($payload['user_id']);
             margin: 0;
             width: 85%;
             height: 100%;
-            /*padding: 3px;*/
-            /*border: 2px solid blue;*/
             float: left;
-            overflow: auto;
+            overflow-y: auto;
             overflow: -moz-scrollbars-vertical;
         }
 
         #messages {
+            box-sizing: border-box; /*If you want the border to be inside margin. */
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
             /*display: block;*/
             display: flex;
             flex: 1;
             flex-flow: column wrap;
             margin: 0;
-            padding: 5px;
             overflow-y: auto;
             overflow-x: hidden;
-            /*float: left;*/
-            /*height: 90%;*/
             width: 100%;
             border-left: 2px solid green;
             border-bottom: 1px solid black;
@@ -236,22 +222,21 @@ $rooms = $db_handler->getRoomIDsNamesAccessToUser($payload['user_id']);
         }
 
         #input {
-            /*margin: 0;*/
-            padding: 5px;
+            margin: 0;
+            box-sizing: border-box;
+            -moz-box-sizing: border-box;
+            -webkit-box-sizing: border-box;
             height: 10%;
-            /*position: fixed;*/
             bottom: 0;
             /*vertical-align: bottom;*/
             width: 100%;
-            /*float: left;*/
-            /*display: flex;*/
-            /*align-items: center;*/
             border: 2px solid black;
         }
 
         #messagebox {
             bottom: 5px;
             position: fixed; /*or absolute*/
+            padding-left: 5px;
             /*display: inline-block;*/
             width: 70%;
             overflow: -moz-scrollbars-vertical;
@@ -273,28 +258,27 @@ $rooms = $db_handler->getRoomIDsNamesAccessToUser($payload['user_id']);
         }
 
         #senddiv {
-            /*position: absolute;*/
-            /*display: block;*/
             float: right;
-            /*bottom: 0;*/
-            /*right: 0;*/
-            /*right: 0;*/
             padding: 5px;
             margin: 0 auto;
             width: 15%;
-            /*margin: 0 auto;*/
-            /*background-color: blue;*/
         }
 
-        #send button {
+        #senddiv button {
             width: auto;
-            height: 35px;
-            /*padding: 5px;*/
-            /*margin: 0 auto;*/
+            background-color: #4CAF50; /* Green */
+            border: none;
+            color: white;
+            /*padding: 15px 32px;*/
+            padding: 5px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
         }
 
-        #send {
-
+        #senddiv button:hover {
+            cursor: pointer;
         }
     </style>
     <script src="jquery-1.11.0.js"></script>
@@ -311,6 +295,7 @@ $rooms = $db_handler->getRoomIDsNamesAccessToUser($payload['user_id']);
         const default_avatar_url = 'https://img.icons8.com/doodle/48/000000/user.png';
         let scrollPositionsOfRooms = initScrollPositions();
         let messagebox_height = $("#messagebox").height();
+        const epoch = 1577836800 * 1000; //in milli seconds till jan 1 2020.
 
         function initScrollPositions() {
             var scrollPositions = {};
@@ -320,8 +305,8 @@ $rooms = $db_handler->getRoomIDsNamesAccessToUser($payload['user_id']);
             return scrollPositions;
         }
 
-        function timeConverter(UNIX_timestamp) {
-            var a = new Date(UNIX_timestamp*1000);
+        function timeConverter(UNIX_timestamp) { //in milli seconds
+            var a = new Date(UNIX_timestamp);
             var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
             var year = a.getFullYear();
             var month = months[a.getMonth()];
@@ -344,12 +329,11 @@ $rooms = $db_handler->getRoomIDsNamesAccessToUser($payload['user_id']);
 
             let messageHolder = document.createElement('div');
             messageHolder.setAttribute('class', 'message-holder');
-            messageHolder.innerHTML += `<div class="message-holder-row1"><div class="message-user">${message.username}</div><div class="message-date"> - ${timeConverter(message.updated_on ? message.updated_on : message.created_on)}</div><div class="message-options">edit</div></div>`;
+            messageHolder.innerHTML += `<div class="message-holder-row1"><div class="message-user">${message.username}</div><div class="message-date"> - ${timeConverter(message.updated_on ? message.updated_on : (message.message_id / 2**21) + epoch)}</div><div id="messageid-${message.message_id}" class="message-options">edit</div></div>`;
             messageHolder.innerHTML += `<div class="message-holder-row2"><span class="message-data">${message.message}</span> </div>`;
             messageRow.appendChild(messageHolder);
 
             return messageRow;
-            // return '<p><span style="font-weight: bold; color: ' + message.color + ';">' + message.username + '</span>: ' + message.message + '</p>';
         }
 
         function connect() {
@@ -498,8 +482,7 @@ $rooms = $db_handler->getRoomIDsNamesAccessToUser($payload['user_id']);
                 if (scrollPositionsOfRooms[current_room_id] === null) { //if scrollheight for room is default then scroll to bottom, else scroll to location where user left off.
                     document.getElementById("messages").scrollTop = 0; //scroll from very top, not from the scroll height of previous room.
                     $("#messages").animate({scrollTop: $("#messages")[0].scrollHeight}, 500);
-                }
-                else
+                } else
                     document.getElementById("messages").scrollTop = scrollPositionsOfRooms[current_room_id];
 
                 displayOnlineUsers();

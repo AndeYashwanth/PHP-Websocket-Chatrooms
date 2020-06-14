@@ -27,7 +27,10 @@ class Client
         return $this->id;
     }
 
-    public function getUserID() : string
+    /**
+     * @return string|null
+     */
+    public function getUserID()
     {
         return $this->user_id;
     }

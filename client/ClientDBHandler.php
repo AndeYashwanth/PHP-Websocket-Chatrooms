@@ -4,7 +4,7 @@ use MongoDB\Driver\ReadConcern;
 use MongoDB\Driver\ReadPreference;
 use MongoDB\Driver\WriteConcern;
 
-require __DIR__ . "/../vendor/autoload.php";
+require_once __DIR__ . "/../vendor/autoload.php";
 
 class ClientDBHandler
 {
@@ -19,7 +19,6 @@ class ClientDBHandler
      * DBHandler constructor.
      * @param string $host
      * @param int $port
-     * @param string $access_type
      */
     function __construct($host = "localhost", $port = 27017)
     {
@@ -43,15 +42,11 @@ class ClientDBHandler
     public function getRoomIDsNamesAccessToUser($user_id)
     {
         try {
-            $result = $this->users_collection->aggregate([
-                ['$match' => ['_id' => $user_id]],
-                ['$lookup' => ['from' => 'rooms', 'localField' => 'rooms_access', 'foreignField' => '_id', 'as' => 'rooms']],
-                ['$unwind' => '$rooms'],
-                ['$project' => ['_id' => 0, 'room_id' => '$rooms._id', 'room_name' => '$rooms.room_name']]
-            ]);//array of associative arrays with keys 'room_id', 'room_name'
+            $rooms_access = $this->users_collection->findOne(['_id' => $user_id], ['projection' => ['_id' => 0, 'rooms_access' => 1]])['rooms_access'];
+            $result = $this->rooms_collection->find(['_id' => ['$in' => $rooms_access]], ['projection' => ['room_name' => 1]]);
             $rooms = array();
             foreach ($result as $room) {
-                $rooms[$room['room_id']] = $room['room_name'];
+                $rooms[$room['_id']] = $room['room_name'];
             }
             return $rooms;
         } catch (Exception $e) {

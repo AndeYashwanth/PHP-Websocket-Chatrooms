@@ -77,7 +77,7 @@ class WebSocket
                     $this->log("Missing user_id field in jwt", $client);
                 }
             } else {
-                $this->log("Empty jwt fields", $client);
+                $this->log("Invalid jwt token.", $client);
             }
         } else {
             $this->log("JWT token missing.", $client);
@@ -512,7 +512,7 @@ class WebSocket
                 if (!$client->getHandshake()) {
                     if ($this->processClientHandshake($client, $buf)) {
                         if ($this->checkOrigin($client->getHeaders())) {
-                            $this->setUserID($client);
+//                            $this->setUserID($client);
                             if (!$this->setUserID($client)) {
                                 $this->log("Error when setting username using jwt cookie.", $client);
                                 $this->log("Client is disconnected", $client);
@@ -806,19 +806,20 @@ class WebSocket
     }
 
     /**
-     * Find client by object.
+     * Find client by object. Returns array of clients, as the same user maybe connected from different computers or tabs.
      * @param string $user_id
-     * @return Client|null
+     * @return array
      */
     public function getClientByUserID($user_id)
     {
+        $clients = array();
         foreach ($this->clients as $client) {
             /* @var $client Client */
             if ($client->getUserID() == $user_id) {
-                return $client;
+                array_push($clients, $client);
             }
         }
-        return null;
+        return $clients;
     }
 
     /**

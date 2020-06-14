@@ -5,22 +5,17 @@ class MessageIdGenerator
 
     private $prev_timestamp; //Increment $increment if current time equals to this.
     private $increment; //If multiple messages arrive at same 10ms then increment this.
-    private $server_id;
-    private $epoch; //custom time from where the time is calculated(in unix time from GMT).
-    private $time_zone_epoch; //no.of 1ms from GMT.
-    private $max_server_id;
-    private $max_increment;
-    private $max_timestamp;
+    private $server_id; //should be generated during server startup.
+    private $epoch; //custom time in ms from where the time is calculated(from GMT).
+    const MAX_SERVER_ID = 2**12; //12 bits
+    const MAX_INCREMENT = 2**9; //9 bits
+    const MAX_TIMESTAMP = 2 ** 42; //42 bits
 
     public function __construct()
     {
         $this->server_id = 123; //generated during server startup.
-        $this->epoch = 1577836800 * 1000; //1ms precision. Jan 1 2020.
-        $this->time_zone_epoch = 9000 * 1000; //1ms precision.
+        $this->epoch = 1577836800 * 1000; //1ms precision. Since Jan 1 2020.
         $this->increment = 0;
-        $this->max_timestamp = 2 ** 42;
-        $this->max_server_id = 512; //9 bits
-        $this->max_increment = 4096; //12 bits
     }
 
     /**
@@ -48,12 +43,13 @@ class MessageIdGenerator
     }
 
     /**
+     * Returns false if increment by 1 exceeds MAX_INCREMENT.
      * @param int $increment
      * @return bool
      */
     public function setIncrement($increment): bool
     {
-        if ($increment < $this->max_increment) {
+        if ($increment < self::MAX_INCREMENT) {
             $this->increment = $increment;
             return true;
         }
@@ -74,7 +70,7 @@ class MessageIdGenerator
      */
     public function setServerId(int $server_id): bool
     {
-        if ($server_id >= $this->max_server_id) {
+        if ($server_id < self::MAX_SERVER_ID) {
             $this->server_id = $server_id;
             return true;
         }
@@ -97,23 +93,9 @@ class MessageIdGenerator
         $this->epoch = $epoch;
     }
 
-    /**
-     * @return int
-     */
-    public function getTimeZoneEpoch(): int
-    {
-        return $this->time_zone_epoch;
-    }
 
     /**
-     * @param int $time_zone_epoch
-     */
-    public function setTimeZoneEpoch(int $time_zone_epoch): void
-    {
-        $this->time_zone_epoch = $time_zone_epoch;
-    }
-
-    /**
+     * Generate 64bit message id.
      * @param int $unix_time_stamp_milli
      * @return bool|int
      */
@@ -126,9 +108,9 @@ class MessageIdGenerator
             $this->setIncrement(1);
         }
         $this->setPrevTimestamp($unix_time_stamp_milli);
-        if ($unix_time_stamp_milli - ($this->getEpoch() + $this->getTimeZoneEpoch()) < $this->max_timestamp) {
-            $message_id = ($unix_time_stamp_milli - ($this->getEpoch() + $this->getTimeZoneEpoch())) << 9;
-            $message_id = ($message_id + $this->getServerId()) << 12;
+        if ($unix_time_stamp_milli - $this->getEpoch() < self::MAX_TIMESTAMP) {
+            $message_id = ($unix_time_stamp_milli - $this->getEpoch()) << 12; //give 11 bits space for server id.
+            $message_id = ($message_id + $this->getServerId()) << 9; //give 10 bit space for increment.
             $message_id += $this->getIncrement();
             return $message_id;
         }

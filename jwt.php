@@ -46,12 +46,17 @@ class JWT
         $payload = base64_decode($base64UrlPayload);
         $json_payload = json_decode($payload, true);
 
-        if ($json_payload['exp'] + 120000 < time()){
+        if ($json_payload['exp'] + 1200000 < time()){
             return false;
         }
         return true;
     }
 
+    /**
+     * Returns false if token is not valid else returns payload.
+     * @param string $token
+     * @return false|string
+     */
     function get_user_details_from_jwt($token){
         if (!$this->validate_jwt_token($token)){
             return false;

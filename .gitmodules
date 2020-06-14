@@ -1,0 +1,3 @@
+[submodule "Sharding"]
+	path = Sharding
+	url = https://github.com/AndeYashwanth/Mongodb-Sharding-Docker

@@ -1,6 +1,6 @@
 <?php
 require __DIR__ . "/../jwt.php";
-require __DIR__ . "/db_handler.php";
+require __DIR__ . "/ClientDBHandler.php";
 
 $db_controller = new ClientDBHandler();
 $jwt = new JWT();
